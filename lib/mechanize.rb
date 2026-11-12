@@ -232,6 +232,8 @@ class Mechanize
     @default_encoding = nil
     @force_default_encoding = false
 
+    @streaming_multipart = false
+
     # defaults
     @agent.max_history = 50
 
@@ -518,6 +520,10 @@ class Mechanize
   # multipart/form-data, or application/x-www-form-urlencoded
   # otherwise.
   #
+  # When #streaming_multipart is enabled, an IO value is streamed from its
+  # current position instead of being read into memory; see
+  # Mechanize::StreamingMultipartBody.
+  #
   # Examples:
   #   agent.post 'http://example.com/', "foo" => "bar"
   #
@@ -542,8 +548,15 @@ class Mechanize
     Mechanize::Util.each_parameter(query) { |k, v|
       if v.is_a?(IO)
         form.enctype = 'multipart/form-data'
-        ul = Form::FileUpload.new({'name' => k.to_s},::File.basename(v.path))
-        ul.file_data = v.read
+        if @streaming_multipart
+          file_name = v.respond_to?(:path) && v.path ?
+            ::File.basename(v.path) : nil
+          ul = Form::FileUpload.new({'name' => k.to_s}, file_name)
+          ul.file_data = v
+        else
+          ul = Form::FileUpload.new({'name' => k.to_s},::File.basename(v.path))
+          ul.file_data = v.read
+        end
         form.file_uploads << ul
       elsif v.is_a?(Form::FileUpload)
         form.enctype = 'multipart/form-data'
@@ -666,6 +679,16 @@ class Mechanize
   # The HTML parser to be used when parsing documents
 
   attr_accessor :html_parser
+
+  ##
+  # When true, multipart form posts (Mechanize#post and Mechanize#submit)
+  # stream file content from disk or IO in chunks of at most 64 KiB instead
+  # of buffering whole files in the request body, and send an accurate
+  # Content-Length.  The default is false, which keeps the historical
+  # behavior of building the entire request body in memory.  See
+  # Mechanize::StreamingMultipartBody.
+
+  attr_accessor :streaming_multipart
 
   ##
   # HTTP/1.0 keep-alive time.  This is no longer supported by mechanize as it
@@ -1354,6 +1377,10 @@ Use of #auth and #basic_auth are deprecated due to a security vulnerability.
     cur_page = form.page || current_page ||
       Page.new
 
+    if @streaming_multipart && form.enctype.downcase =~ /^multipart\/form-data/
+      return post_form_streaming(uri, form, cur_page, headers)
+    end
+
     request_data = form.request_data
 
     log.debug("query: #{ request_data.inspect }") if log
@@ -1367,6 +1394,29 @@ Use of #auth and #basic_auth are deprecated due to a security vulnerability.
     page = @agent.fetch uri, :post, headers, [request_data], cur_page
     add_to_history(page)
     page
+  end
+
+  ##
+  # Posts +form+ to +uri+, streaming the multipart body instead of buffering
+  # it in memory.  The streaming body is always closed when the operation
+  # finishes, whether it succeeds or raises.
+
+  def post_form_streaming(uri, form, cur_page, headers)
+    body = form.streaming_request_data
+
+    log.debug("query: #{ body.inspect }") if log
+
+    headers = {
+      'Content-Type'    => form.enctype,
+      'Content-Length'  => body.length.to_s,
+    }.merge headers
+
+    # fetch the page
+    page = @agent.fetch uri, :post, headers, [body], cur_page
+    add_to_history(page)
+    page
+  ensure
+    body.close if body
   end
 
   ##
@@ -1397,6 +1447,7 @@ require 'mechanize/history'
 require 'mechanize/http'
 require 'mechanize/http/agent'
 require 'mechanize/http/auth_challenge'
+require 'mechanize/streaming_multipart_body'
 require 'mechanize/http/auth_realm'
 require 'mechanize/http/content_disposition_parser'
 require 'mechanize/http/www_authenticate_parser'

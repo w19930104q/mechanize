@@ -152,6 +152,36 @@ tell it what file name you want to upload:
 
   form.file_uploads.first.file_name = "somefile.jpg"
 
+=== Streaming Multipart Uploads
+
+By default mechanize builds the whole multipart request body in memory, which
+means an uploaded file is buffered in full (an IO given to Mechanize#post is
+read to its end).  When uploads are large enough to threaten memory, enable
+streaming multipart:
+
+  agent = Mechanize.new
+  agent.streaming_multipart = true
+
+With streaming enabled, Mechanize#post and Mechanize#submit send multipart
+bodies by reading file content in chunks of at most 64 KiB straight from the
+source, with an accurate Content-Length computed up front.  Upload content
+may be given as:
+
+* a file path, through FileUpload#file_name (mechanize opens and closes the
+  file itself),
+* a String, through FileUpload#file_data, or
+* a seekable IO with a known length, through FileUpload#file_data or as a
+  value passed to Mechanize#post.  The IO is read from the position it has
+  when the request is built; mechanize returns it to that position
+  afterwards and never closes it.  An IO that cannot be seeked raises
+  Mechanize::Error before anything is sent.
+
+Field encoding, duplicate values and part order are preserved, exactly as in
+the default buffered mode, and a 401 authentication challenge is answered
+with a byte-identical resend of the body.  If the request fails for any
+reason -- a network error, a read error, or an exception in a hook -- files
+mechanize opened are still closed and caller IOs are still restored.
+
 == Scraping Data
 
 Mechanize uses nokogiri[http://nokogiri.org/] to parse HTML.  What does this

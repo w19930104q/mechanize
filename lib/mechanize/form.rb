@@ -421,6 +421,66 @@ class Mechanize::Form
     end
   end
 
+  ##
+  # Builds a Mechanize::StreamingMultipartBody for this form, which streams
+  # file content from disk or IO instead of buffering it in the request
+  # body string.  Like #request_data, a boundary is generated and #enctype
+  # is updated to contain it.  This is used by Mechanize#post and
+  # Mechanize#submit when Mechanize#streaming_multipart is enabled.
+  #
+  # File upload fields may provide their content as a String, as a file
+  # path through FileUpload#file_name, or as a seekable IO with a known
+  # length through FileUpload#file_data.  See
+  # Mechanize::StreamingMultipartBody for the read and cleanup semantics.
+
+  def streaming_request_data
+    query_params = build_query()
+
+    boundary = rand_string(20)
+    @enctype = "multipart/form-data; boundary=#{boundary}"
+
+    delimiter = "--#{boundary}\r\n"
+
+    segments = []
+
+    query_params.each do |k, v|
+      next unless k
+
+      buf = ::String.new
+      buf << delimiter
+      param_to_multipart(k, v, buf)
+      segments << [:string, buf]
+    end
+
+    @file_uploads.each do |f|
+      buf = ::String.new
+      buf << delimiter
+      file_to_multipart_header(f, buf)
+      segments << [:string, buf]
+
+      case (file_data = f.file_data)
+      when nil
+        segments << [:file, f.file_name] if f.file_name
+      when ::String
+        segments << [:string, file_data]
+      else
+        if file_data.respond_to? :read
+          segments << [:io, file_data]
+        else
+          raise Mechanize::Error,
+                "unsupported file_data for streaming multipart upload: " \
+                "#{file_data.inspect}"
+        end
+      end
+
+      segments << [:string, CRLF]
+    end
+
+    segments << [:string, "--#{boundary}--\r\n"]
+
+    Mechanize::StreamingMultipartBody.new(segments)
+  end
+
   # Removes all fields with name +field_name+.
   def delete_field!(field_name)
     @fields.delete_if{ |f| f.name == field_name}
@@ -665,6 +725,29 @@ class Mechanize::Form
   end
 
   def file_to_multipart(file, buf = ::String.new)
+    file_to_multipart_header(file, buf)
+
+    if file.file_data.nil? and file.file_name
+      file.file_data = File.binread(file.file_name)
+    end
+
+    if file_data = file.file_data
+      if file_data.respond_to? :read
+        buf << file_data.read.force_encoding(Encoding::ASCII_8BIT)
+      else
+        buf << file_data.b
+      end
+    end
+
+    buf << CRLF
+  end
+
+  # Appends the multipart header for the file upload +file+ to +buf+: the
+  # Content-Disposition, Content-Transfer-Encoding and Content-Type lines
+  # and the blank line that precedes the content.  When +file+ has a
+  # file_name but no file_data, its mime_type is set from the file name,
+  # just like file_to_multipart does, but the file content is not read.
+  def file_to_multipart_header(file, buf = ::String.new)
     file_name = file.file_name ? ::File.basename(file.file_name) : ''
 
     body = buf <<
@@ -675,7 +758,6 @@ class Mechanize::Form
            "\"\r\nContent-Transfer-Encoding: binary\r\n".freeze
 
     if file.file_data.nil? and file.file_name
-      file.file_data = File.binread(file.file_name)
       file.mime_type =
         WEBrick::HTTPUtils.mime_type(file.file_name,
                                      WEBrick::HTTPUtils::DefaultMimeTypes)
@@ -683,16 +765,6 @@ class Mechanize::Form
 
     if file.mime_type
       body << "Content-Type: ".freeze << file.mime_type << CRLF
-    end
-
-    body << CRLF
-
-    if file_data = file.file_data
-      if file_data.respond_to? :read
-        body << file_data.read.force_encoding(Encoding::ASCII_8BIT)
-      else
-        body << file_data.b
-      end
     end
 
     body << CRLF

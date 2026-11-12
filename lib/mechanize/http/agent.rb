@@ -594,7 +594,20 @@ class Mechanize::HTTP::Agent
       klass = Net::HTTP.const_get(method.to_s.capitalize)
 
       request ||= klass.new(uri.request_uri)
-      request.body = params.first if params
+
+      if params then
+        entity = params.first
+
+        if Mechanize::StreamingMultipartBody === entity then
+          # A fresh request object is built for every send, including the
+          # resend of a 401 authentication challenge, so rewind the body to
+          # transmit byte-identical content every time.
+          entity.rewind
+          request.body_stream = entity
+        else
+          request.body = entity
+        end
+      end
 
       request
     when 'file' then

@@ -1,5 +1,12 @@
 # Mechanize CHANGELOG
 
+## Unreleased
+
+### Added
+
+* `Mechanize#streaming_multipart` (default: false) streams multipart form posts from `Mechanize#post` and `Mechanize#submit` instead of buffering whole files in the request body. File upload content may come from a file path, a String, or a seekable IO with a known length; file and IO content is read in chunks of at most 64 KiB, an accurate `Content-Length` is computed up front, and a 401 authentication resend retransmits a byte-identical body with the same boundary. Files mechanize opens are closed and caller-supplied IOs are restored to their initial position (never closed) when the operation finishes, whether it succeeds or raises. `Mechanize::Form#request_data` and the default buffered mode are unchanged.
+
+
 ## 2.14.2 / 2026-10-26
 
 ### Security
